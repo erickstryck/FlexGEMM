@@ -34,7 +34,7 @@
  * @return          [M, Kw * Kh * Kd] uint32 tensor containing the submanifold convolution neighbor map
  */
 torch::Tensor hashmap_build_submanifold_conv_neighbour_map_cuda(
-    const torch::Tensor& hashmap,
+    torch::Tensor& hashmap,
     const torch::Tensor& coords,
     int W,
     int H,

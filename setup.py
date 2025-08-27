@@ -33,6 +33,7 @@ setup(
         "flex_gemm.kernels",
         "flex_gemm.kernels.triton",
         "flex_gemm.kernels.triton.spconv",
+        "flex_gemm.kernels.triton.grid_sample",
     ],
     ext_modules=[
         CUDAExtension(
@@ -40,6 +41,8 @@ setup(
             sources=[
                 # Hashmap functions
                 "flex_gemm/kernels/cuda/hash/hash.cu",
+                # Grid sample functions
+                "flex_gemm/kernels/cuda/grid_sample/grid_sample.cu",
                 # Convolution functions
                 "flex_gemm/kernels/cuda/spconv/neighbor_map.cu",
                 # main

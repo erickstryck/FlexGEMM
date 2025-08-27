@@ -81,3 +81,21 @@ torch::Tensor hashmap_lookup_3d_cuda(
     int H,
     int D
 );
+
+
+/**
+ * Insert 3D coordinates into the hashmap using index as value
+ * 
+ * @param hashmap   [2N] uint32 tensor containing the hashmap (key-value pairs)
+ * @param coords    [M, 4] int32 tensor containing the keys to be inserted
+ * @param W         the number of width dimensions
+ * @param H         the number of height dimensions
+ * @param D         the number of depth dimensions
+ */
+void hashmap_insert_3d_idx_as_val_cuda(
+    torch::Tensor& hashmap,
+    const torch::Tensor& coords,
+    int W,
+    int H,
+    int D
+);

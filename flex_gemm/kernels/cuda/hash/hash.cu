@@ -260,3 +260,68 @@ torch::Tensor hashmap_lookup_3d_cuda(
 
     return output;
 }
+
+
+/**
+ * Insert 3D coordinates into the hashmap using index as value
+ * 
+ * @param N         number of elements in the hashmap
+ * @param M         number of 3d coordinates
+ * @param W         the number of width dimensions
+ * @param H         the number of height dimensions
+ * @param D         the number of depth dimensions
+ * @param hashmap   [2N] uint32 tensor containing the hashmap (key-value pairs)
+ * @param coords    [M, 4] int32 tensor containing the keys to be inserted
+ */
+__global__ void hashmap_insert_3d_idx_as_val_cuda_kernel(
+    const uint32_t N,
+    const uint32_t M,
+    const int W,
+    const int H,
+    const int D,
+    uint32_t* __restrict__ hashmap,
+    const int32_t* __restrict__ coords
+) {
+    uint32_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (thread_id < M) {
+        int4 coord = reinterpret_cast<const int4*>(coords)[thread_id];
+        int b = coord.x;
+        int x = coord.y;
+        int y = coord.z;
+        int z = coord.w;
+        uint32_t key = static_cast<uint32_t>((((b * W + x) * H + y) * D + z));
+        linear_probing_insert(hashmap, key, thread_id, N);
+    }
+}
+
+
+/**
+ * Insert 3D coordinates into the hashmap using index as value
+ * 
+ * @param hashmap   [2N] uint32 tensor containing the hashmap (key-value pairs)
+ * @param coords    [M, 4] int32 tensor containing the keys to be inserted
+ * @param W         the number of width dimensions
+ * @param H         the number of height dimensions
+ * @param D         the number of depth dimensions
+ */
+void hashmap_insert_3d_idx_as_val_cuda(
+    torch::Tensor& hashmap,
+    const torch::Tensor& coords,
+    int W,
+    int H,
+    int D
+) {
+    // Call CUDA kernel
+    hashmap_insert_3d_idx_as_val_cuda_kernel<<<
+        (coords.size(0) + BLOCK_SIZE - 1) / BLOCK_SIZE,
+        BLOCK_SIZE
+    >>>(
+        hashmap.size(0) / 2,
+        coords.size(0),
+        W,
+        H,
+        D,
+        hashmap.data_ptr<uint32_t>(),
+        coords.data_ptr<int32_t>()
+    );
+}
