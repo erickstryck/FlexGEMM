@@ -67,7 +67,7 @@ def indice_weighed_sum_bwd_input(
     weight: torch.Tensor,
     N: int,
 ) -> torch.Tensor:
-    assert grad_output.is_contiguous(), "Matrix input must be contiguous"
+    assert grad_output.is_contiguous(), "Matrix grad_output must be contiguous"
     assert indices.is_contiguous(), "Matrix indices must be contiguous"
     assert weight.is_contiguous(), "Matrix weight must be contiguous"
     assert indices.shape == weight.shape, "Indices and weight must have the same shape"

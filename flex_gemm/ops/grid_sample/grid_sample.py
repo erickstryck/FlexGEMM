@@ -136,7 +136,7 @@ class GridSample3dFunction(Function):
         )
 
         grad_feats = kernels.triton.indice_weighed_sum_bwd_input(
-            grad_output.view(-1, ctx.C),
+            grad_output.reshape(-1, ctx.C).contiguous(),
             indices.view(-1, 8),
             weight.view(-1, 8),
             ctx.N,
