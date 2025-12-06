@@ -40,7 +40,7 @@ __global__ void hashmap_lookup_grid_sample_3d_nearest_neighbor_map_kernel(
         if (x >= 0 && x < W && y >= 0 && y < H && z >= 0 && z < D) {
             uint32_t key = static_cast<uint32_t>((((b * W + x) * H + y) * D + z));
             uint32_t value = linear_probing_lookup(hashmap, key, N);
-            if (value != K_EMPTY) {
+            if (value != std::numeric_limits<uint32_t>::max()) {
                 neighbor[thread_id] = value;
             }
         }
@@ -69,7 +69,7 @@ torch::Tensor hashmap_build_grid_sample_3d_nearest_neighbor_map(
     const int D
 ) {
     // Allocate output tensor
-    auto neighbor = torch::full({grid.size(0), grid.size(1)}, K_EMPTY, torch::dtype(torch::kUInt32).device(hashmap.device()));
+    auto neighbor = torch::full({grid.size(0), grid.size(1)}, std::numeric_limits<uint32_t>::max(), torch::dtype(torch::kUInt32).device(hashmap.device()));
 
     // Insert 3D coordinates into the hashmap
     hashmap_insert_3d_idx_as_val_cuda(
@@ -129,7 +129,7 @@ __global__ void hashmap_lookup_grid_sample_3d_trilinear_neighbor_map_weight_kern
     if (thread_id < B * L) {
         int b = thread_id / L;
         float3 q = { query[3 * thread_id], query[3 * thread_id + 1], query[3 * thread_id + 2] };
-        uint32_t n[8] = { K_EMPTY };
+        uint32_t n[8] = { std::numeric_limits<uint32_t>::max() };
         float w[8] = { 0.0f };
         float w_sum = 0.0f;
 
@@ -145,7 +145,7 @@ __global__ void hashmap_lookup_grid_sample_3d_trilinear_neighbor_map_weight_kern
             if (x >= 0 && x < W && y >= 0 && y < H && z >= 0 && z < D) {
                 uint32_t key = static_cast<uint32_t>((((b * W + x) * H + y) * D + z));
                 uint32_t value = linear_probing_lookup(hashmap, key, N);
-                if (value != K_EMPTY) {
+                if (value != std::numeric_limits<uint32_t>::max()) {
                     n[i] = value;
                     w[i] = (1 - abs(q.x - x - 0.5f)) * (1 - abs(q.y - y - 0.5f)) * (1 - abs(q.z - z - 0.5f));
                     w_sum += w[i];
@@ -189,7 +189,7 @@ std::tuple<torch::Tensor, torch::Tensor> hashmap_build_grid_sample_3d_trilinear_
     const int D
 ) {
     // Allocate output tensor
-    auto neighbor = torch::full({grid.size(0), grid.size(1), 8}, K_EMPTY, torch::dtype(torch::kUInt32).device(hashmap.device()));
+    auto neighbor = torch::full({grid.size(0), grid.size(1), 8}, std::numeric_limits<uint32_t>::max(), torch::dtype(torch::kUInt32).device(hashmap.device()));
     auto weight = torch::zeros({grid.size(0), grid.size(1), 8}, torch::dtype(torch::kFloat32).device(hashmap.device()));
 
     // Insert 3D coordinates into the hashmap

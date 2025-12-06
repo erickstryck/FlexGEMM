@@ -55,7 +55,7 @@ __global__ void hashmap_lookup_submanifold_conv_neighbour_map_cuda_kernel(
         int KhKd = Kh * Kd;
         int v = thread_id % half_V;
         
-        uint32_t value = K_EMPTY;
+        uint32_t value = std::numeric_limits<uint32_t>::max();
         if (v == half_V - 1) {
             value = idx;
         }
@@ -66,7 +66,7 @@ __global__ void hashmap_lookup_submanifold_conv_neighbour_map_cuda_kernel(
             if (kx >= 0 && kx < W && ky >= 0 && ky < H && kz >= 0 && kz < D) {
                 uint32_t key = static_cast<uint32_t>((((b * W + kx) * H + ky) * D + kz));
                 value = linear_probing_lookup(hashmap, key, N);
-                if (value != K_EMPTY) {;
+                if (value != std::numeric_limits<uint32_t>::max()) {;
                     neighbor[value * V + V - 1 - v] = idx;
                 }
             }
@@ -108,7 +108,7 @@ torch::Tensor hashmap_build_submanifold_conv_neighbour_map_cuda(
 ) {
     // Allocate output tensor
     int V = Kw * Kh * Kd;
-    auto neighbor = torch::full({coords.size(0), V}, K_EMPTY, torch::dtype(torch::kUInt32).device(hashmap.device()));
+    auto neighbor = torch::full({coords.size(0), V}, std::numeric_limits<uint32_t>::max(), torch::dtype(torch::kUInt32).device(hashmap.device()));
 
     // Insert 3D coordinates into the hashmap
     hashmap_insert_3d_idx_as_val_cuda(
@@ -193,7 +193,7 @@ __global__ void neighbor_map_to_gray_binary_code_and_T_map_cuda_kernel(
         int n = idx % len_n;
         uint tmp = neigh_map[n * V + v];
         *(uint*)&neigh_map_T[v * N + n + n_base] = tmp;
-        tmp = tmp != K_EMPTY;
+        tmp = tmp != std::numeric_limits<uint32_t>::max();
         *(uint*)&neigh_mask_T[v * N + n + n_base] = tmp;
         idx += BLOCK_SIZE;
     }
@@ -203,7 +203,7 @@ __global__ void neighbor_map_to_gray_binary_code_and_T_map_cuda_kernel(
         uint32_t gray = 0;
         for (uint32_t v = 0; v < V; v++) {
             uint32_t neighbor = neigh_map[threadIdx.x * V + v];
-            if (neighbor != K_EMPTY) gray += 1 << v;
+            if (neighbor != std::numeric_limits<uint32_t>::max()) gray += 1 << v;
         }
         // Gray code to binary code
         uint32_t binary = gray;
