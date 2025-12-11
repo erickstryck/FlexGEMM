@@ -15,7 +15,7 @@ It implements **Explicit**, **Implicit**, and **Masked Implicit** algorithm vari
 
 ## ✨ Why FlexGEMM?
 
-- **Triton-First Architecture**: Built entirely on [OpenAI Triton](https://github.com/openai/triton), ensuring high-performance kernel execution and cross-platform compatibility.
+- **Triton-First Architecture**: Built entirely on [Triton](https://github.com/triton-lang/triton), ensuring high-performance kernel execution and cross-platform compatibility.
 - **Sparse-Optimized**: Specifically tailored for 3D sparse tensors, efficiently handling highly irregular sparsity patterns.
 - **Blazing Fast**: Consistently outperforms standard sparse convolution libraries (such as `spconv`, `torchsparse`) in training throughput.
 
