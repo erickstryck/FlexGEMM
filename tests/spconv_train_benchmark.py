@@ -15,7 +15,6 @@ from flex_gemm.ops.spconv import SubMConv3dFunction, sparse_submanifold_conv3d
 from utils import sphere_coords, benchmark_kernel, zero_grad
 
 
-torch.autograd.set_grad_enabled(False)
 DTYPE = torch.float16
 allow_tf32 = True
 

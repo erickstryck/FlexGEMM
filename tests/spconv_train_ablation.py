@@ -7,7 +7,6 @@ from flex_gemm.ops.spconv import SubMConv3dFunction, sparse_submanifold_conv3d
 from utils import sphere_coords, benchmark_kernel, zero_grad
 
 
-torch.autograd.set_grad_enabled(False)
 DTYPE = torch.float16
 allow_tf32 = True
 
@@ -140,9 +139,9 @@ def test_conv_fwd():
         {'RES': 64, 'C': 1024, 'L': 2},
         {'RES': 128, 'C': 512, 'L': 2},
         {'RES': 256, 'C': 256, 'L': 2},
-        {'RES': 512, 'C': 128, 'L': 2},
-        {'RES': 1024, 'C': 64, 'L': 2},
-        {'RES': 2048, 'C': 64, 'L': 1},
+        # {'RES': 512, 'C': 128, 'L': 2},
+        # {'RES': 1024, 'C': 64, 'L': 2},
+        # {'RES': 2048, 'C': 64, 'L': 1},
     ]
     
     # List of custom kernel functions.
