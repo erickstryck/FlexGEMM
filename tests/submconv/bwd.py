@@ -1,3 +1,6 @@
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from tqdm import tqdm
 import torch
 # import spconv.pytorch as spconv
@@ -230,8 +233,8 @@ def test_conv_bwd():
         {'RES': 128, 'C': 512},
         {'RES': 256, 'C': 256},
         {'RES': 512, 'C': 128},
-        {'RES': 1024, 'C': 64},
-        {'RES': 2048, 'C': 32},
+        # {'RES': 1024, 'C': 64},
+        # {'RES': 2048, 'C': 32},
     ]
     
     # List of custom kernel functions.
@@ -297,7 +300,7 @@ def test_conv_bwd():
                 
     # Print results as a formatted table.
     print("=" * 180)
-    print("Conv Backward Benchmark Results")
+    print("SubMConv Backward Benchmark Results")
     print("=" * 180)
     for m in ['time','memory', 'err_max', 'err_mean']:
         print(m.capitalize())

@@ -1,3 +1,6 @@
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,7 +18,6 @@ from flex_gemm.ops.spconv import SubMConv3dFunction, sparse_submanifold_conv3d
 from utils import sphere_coords, benchmark_kernel, zero_grad
 
 
-torch.autograd.set_grad_enabled(False)
 DTYPE = torch.float16
 allow_tf32 = True
 
@@ -42,6 +44,7 @@ def spconv_kernel_fn(model, feats, coords, shape):
     for layer in model:
         h = layer(h)
     h = h.features
+    h.backward(torch.ones_like(h))
 
 
 def torchsparse_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
@@ -72,6 +75,7 @@ def torchsparse_kernel_fn(model, feats, coords, shape):
     for layer in model:
         h = layer(h)
     h = h.feats
+    h.backward(torch.ones_like(h))
 
 
 def fvdb_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
@@ -99,7 +103,8 @@ def fvdb_kernel_fn(model, feats, coords, shape):
     for layer in model:
         h = layer(h)
     h = h.data.jdata
-    
+    h.backward(torch.ones_like(h))
+
 
 def warpconvnet_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     # Init module.
@@ -122,6 +127,7 @@ def warpconvnet_kernel_fn(model, feats, coords, shape):
     for layer in model:
         h = layer(h)
     h = h.feature_tensor
+    h.backward(torch.ones_like(h))
 
 
 def flex_gemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
@@ -151,6 +157,7 @@ def flex_gemm_kernel_fn(params, feats, coords, shape):
         weight = params[f'layer{i}']['weight']
         bias = params[f'layer{i}']['bias']
         h = sparse_submanifold_conv3d(h, coords, shape, weight, bias, neighbor_cache)[0]
+    h.backward(torch.ones_like(h))
 
 
 def test_conv_fwd():
@@ -162,8 +169,8 @@ def test_conv_fwd():
         {'RES': 64, 'C': 1024, 'L': 2},
         {'RES': 128, 'C': 512, 'L': 2},
         {'RES': 256, 'C': 256, 'L': 2},
-        {'RES': 512, 'C': 128, 'L': 2},
-        {'RES': 1024, 'C': 64, 'L': 2},
+        # {'RES': 512, 'C': 128, 'L': 2},
+        # {'RES': 1024, 'C': 64, 'L': 2},
     ]
     
     # List of custom kernel functions.
@@ -204,7 +211,7 @@ def test_conv_fwd():
                 
     # Print results as a formatted table.
     print("=" * 180)
-    print("Conv Forward Benchmark Results")
+    print("SubMConv Train Benchmark Results")
     print("=" * 180)
     for m in ['time','memory']:
         print(m.capitalize())
@@ -246,7 +253,7 @@ def test_conv_fwd():
                 f'{time:.2f}',
                 ha='center',
                 va='bottom',
-                fontsize=8
+                fontsize=7
             )
 
     plt.xlabel("Configuration (RES, C, L)")

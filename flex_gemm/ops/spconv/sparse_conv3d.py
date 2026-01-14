@@ -1,12 +1,12 @@
 from typing import *
 import torch
 from torch.autograd import Function
-from . import Algorithm
+from . import Algorithm, SparseConv3dOutCoordAlgorithm
 from .. import spconv, utils
 from ... import kernels
 
 
-class SubMConv3dNeighborCache:
+class SparseConv3dNeighborCache:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -33,40 +33,122 @@ class SubMConv3dNeighborCache:
         return self[f'valid_kernel_seg_{block_size}']
 
 
-class SubMConv3dFunction(Function):
+class SparseConv3dFunction(Function):
+    @staticmethod
+    def _get_output_coords(
+        coords: torch.Tensor,
+        shape: torch.Size,
+        kernel_size: Tuple[int, int, int],
+        stride: Tuple[int, int, int],
+        padding: Tuple[int, int, int],
+        dilation: Tuple[int, int, int]
+    ) -> torch.Tensor:
+        assert coords.is_contiguous(), "Coords should be contiguous"
+        assert coords.dtype in [torch.int32], "Unsupported coords dtype. Expect int32"
+        N, C, W, H, D = shape
+        
+        if coords.is_cuda:
+            if spconv.OUT_COORD_ALGO == SparseConv3dOutCoordAlgorithm.HASHMAP:
+                output_coords = kernels.cuda.hashmap_build_sparse_conv_out_coords(
+                    coords, spconv.OUT_COORD_HASHMAP_RATIO,
+                    N, W, H, D,
+                    kernel_size[0], kernel_size[1], kernel_size[2],
+                    stride[0], stride[1], stride[2],
+                    padding[0], padding[1], padding[2],
+                    dilation[0], dilation[1], dilation[2],
+                )
+            elif spconv.OUT_COORD_ALGO == SparseConv3dOutCoordAlgorithm.EXPAND_UNIQUE:
+                output_coords = kernels.cuda.expand_unique_build_sparse_conv_out_coords(
+                    coords,
+                    N, W, H, D,
+                    kernel_size[0], kernel_size[1], kernel_size[2],
+                    stride[0], stride[1], stride[2],
+                    padding[0], padding[1], padding[2],
+                    dilation[0], dilation[1], dilation[2],
+                )
+        else:
+            raise NotImplementedError("CPU version is not implemented")
+        return output_coords
+    
+    @staticmethod
+    def _get_output_coords_torch(
+        coords: torch.Tensor,
+        shape: torch.Size,
+        kernel_size: Tuple[int, int, int],
+        stride: Tuple[int, int, int],
+        padding: Tuple[int, int, int],
+        dilation: Tuple[int, int, int]
+    ) -> torch.Tensor:
+        N, C, W, H, D = shape
+        Wo = (W + 2 * padding[0] - dilation[0] * (kernel_size[0] - 1) - 1) // stride[0] + 1
+        Ho = (H + 2 * padding[1] - dilation[1] * (kernel_size[1] - 1) - 1) // stride[1] + 1
+        Do = (D + 2 * padding[2] - dilation[2] * (kernel_size[2] - 1) - 1) // stride[2] + 1
+        
+        offset = torch.meshgrid(
+            -dilation[0] * torch.arange(kernel_size[0]),
+            -dilation[1] * torch.arange(kernel_size[1]),
+            -dilation[2] * torch.arange(kernel_size[2]),
+            indexing='ij'
+        )
+        offset = torch.stack(offset, dim=-1).reshape(-1, 3).int().to(coords.device)
+        all_potentials_out_coords = (coords + torch.tensor([0, padding[0], padding[1], padding[2]], device=coords.device).int()) \
+                                     .unsqueeze(1).repeat(1, kernel_size[0] * kernel_size[1] * kernel_size[2], 1)
+        all_potentials_out_coords[:, :, 1:] += offset.unsqueeze(0)                          # [N, kernel_vol, 4]
+        all_potentials_out_coords = all_potentials_out_coords.reshape(-1, 4)                # [N * kernel_vol, 4]
+        t_stride = torch.tensor([1, stride[0], stride[1], stride[2]], device=coords.device).int()
+        valid_strided_out_coords = torch.all(all_potentials_out_coords % t_stride == 0, dim=-1)
+        all_potentials_out_coords = all_potentials_out_coords[valid_strided_out_coords] // t_stride
+        t_out_size = torch.tensor([Wo, Ho, Do], device=coords.device).int()
+        valid_out_coords = torch.all((all_potentials_out_coords[:, 1:] >= 0) * (all_potentials_out_coords[:, 1:] < t_out_size), dim=-1)
+        all_potentials_out_coords = all_potentials_out_coords[valid_out_coords]
+        out_coords = torch.unique(all_potentials_out_coords, dim=0)
+        
+        return out_coords
+    
     @staticmethod
     def _compute_neighbor_cache(
         coords: torch.Tensor,
         shape: torch.Size,
         kernel_size: Tuple[int, int, int],
-        dilation: Tuple[int, int, int]
-    ) -> SubMConv3dNeighborCache:
+        stride: Tuple[int, int, int],
+        padding: Tuple[int, int, int],
+        dilation: Tuple[int, int, int],
+        needs_grad: bool,
+    ) -> SparseConv3dNeighborCache:
         assert coords.is_contiguous(), "Coords should be contiguous"
         assert coords.dtype in [torch.int32], "Unsupported coords dtype. Expect int32"
         N, C, W, H, D = shape
         
-        hashmap_keys, hashmap_vals = utils.init_hashmap(shape, int(spconv.HASHMAP_RATIO * coords.shape[0]), coords.device)
-
+        out_coords = SparseConv3dFunction._get_output_coords(
+            coords, shape, kernel_size, stride, padding, dilation
+        )
+        
         if spconv.ALGORITHM in [Algorithm.EXPLICIT_GEMM, Algorithm.IMPLICIT_GEMM, Algorithm.IMPLICIT_GEMM_SPLITK]:
             if coords.is_cuda:
-                neighbor_map = kernels.cuda.hashmap_build_submanifold_conv_neighbour_map(
-                    hashmap_keys, hashmap_vals, coords,
-                    W, H, D,
+                neighbor_map, neighbor_map_bwd = kernels.cuda.hashmap_build_sparse_conv_neighbour_map(
+                    coords, out_coords, spconv.HASHMAP_RATIO, needs_grad,
+                    N, W, H, D,
                     kernel_size[0], kernel_size[1], kernel_size[2],
+                    stride[0], stride[1], stride[2],
+                    padding[0], padding[1], padding[2],
                     dilation[0], dilation[1], dilation[2],
                 )
             else:
                 raise NotImplementedError("CPU version of hashmap is not implemented")
-            return SubMConv3dNeighborCache(**{
+            return SparseConv3dNeighborCache(**{
                 'neighbor_map': neighbor_map,
+                'neighbor_map_bwd': neighbor_map_bwd,
             })
         
         elif spconv.ALGORITHM in [Algorithm.MASKED_IMPLICIT_GEMM, Algorithm.MASKED_IMPLICIT_GEMM_SPLITK]:
+            raise NotImplementedError("TODO")
             if coords.is_cuda:
-                neighbor_map = kernels.cuda.hashmap_build_submanifold_conv_neighbour_map(
-                    hashmap_keys, hashmap_vals, coords,
-                    W, H, D,
+                neighbor_map, neighbor_map_bwd = kernels.cuda.hashmap_build_sparse_conv_neighbour_map(
+                    coords, out_coords, spconv.HASHMAP_RATIO, needs_grad,
+                    N, W, H, D,
                     kernel_size[0], kernel_size[1], kernel_size[2],
+                    stride[0], stride[1], stride[2],
+                    padding[0], padding[1], padding[2],
                     dilation[0], dilation[1], dilation[2],
                 )
             else:
@@ -77,7 +159,7 @@ class SubMConv3dFunction(Function):
             gray_code, sorted_idx, valid_signal_i, valid_signal_o, valid_signal_seg = \
                 kernels.cuda.neighbor_map_post_process_for_masked_implicit_gemm_1(neighbor_map)
             
-            return SubMConv3dNeighborCache(**{
+            return SparseConv3dNeighborCache(**{
                 'neighbor_map': neighbor_map,
                 'gray_code': gray_code,
                 'sorted_idx': sorted_idx,
@@ -93,43 +175,63 @@ class SubMConv3dFunction(Function):
         coords: torch.Tensor,
         shape: torch.Size,
         kernel_size: Tuple[int, int, int],
-        dilation: Tuple[int, int, int]
-    ) -> SubMConv3dNeighborCache:
+        stride: Tuple[int, int, int],
+        padding: Tuple[int, int, int],
+        dilation: Tuple[int, int, int],
+        needs_grad: bool,
+    ) -> SparseConv3dNeighborCache:
         assert spconv.ALGORITHM == Algorithm.EXPLICIT_GEMM, "Only explicit_gemm is supported for torch implementation"
         N, C, W, H, D = shape
-        L = coords.shape[0]
+        out_coords = SparseConv3dFunction._get_output_coords(
+            coords, shape, kernel_size, stride, padding, dilation
+        )
+        M = coords.shape[0]
+        L = out_coords.shape[0]
+        V = kernel_size[0] * kernel_size[1] * kernel_size[2]
         assert N * W * H * D <= 2**32, "Currently, the max number of elements in a tensor is 2^32"
-        M = torch.tensor([W * H * D, H * D, D, 1], device=coords.device).int()
+        OFFSET = torch.tensor([W * H * D, H * D, D, 1], device=coords.device).int()
         
-        keys = (coords * M[None]).sum(dim=-1)
+        keys = (coords * OFFSET).sum(dim=-1)
         sorted_keys, indices = torch.sort(keys)
         
         # Compute neighbor coords
         offset = torch.meshgrid(
-            torch.arange(-(kernel_size[0] // 2) * dilation[0], kernel_size[0] // 2 * dilation[0] + 1, dilation[0]),
-            torch.arange(-(kernel_size[1] // 2) * dilation[1], kernel_size[1] // 2 * dilation[1] + 1, dilation[1]),
-            torch.arange(-(kernel_size[2] // 2) * dilation[2], kernel_size[2] // 2 * dilation[2] + 1, dilation[2]),
+            torch.arange(kernel_size[0]) * dilation[0] - padding[0],
+            torch.arange(kernel_size[1]) * dilation[1] - padding[1],
+            torch.arange(kernel_size[2]) * dilation[2] - padding[2],
             indexing='ij'
         )
         offset = torch.stack(offset, dim=-1).reshape(-1, 3).int().to(coords.device)
-        neighbor_coords = coords.unsqueeze(1).repeat(1, kernel_size[0] * kernel_size[1] * kernel_size[2], 1)
-        neighbor_coords[:, :, -3:] += offset.unsqueeze(0)                                    # [N, kernel_vol, 4]
-        neighbor_coords = neighbor_coords.reshape(-1, 4)                                    # [N * kernel_vol, 4]
+        t_stride = torch.tensor([1, stride[0], stride[1], stride[2]], device=coords.device).int()
+        neighbor_coords = (out_coords * t_stride).unsqueeze(1).repeat(1, V, 1)
+        neighbor_coords[:, :, -3:] += offset.unsqueeze(0)                                    # [L, V, 4]
+        neighbor_coords = neighbor_coords.reshape(-1, 4)                                     # [L * V, 4]
         neighbor_valid = (neighbor_coords[:, 1] >= 0) & (neighbor_coords[:, 1] < W) & \
                          (neighbor_coords[:, 2] >= 0) & (neighbor_coords[:, 2] < H) & \
                          (neighbor_coords[:, 3] >= 0) & (neighbor_coords[:, 3] < D)
-        neighbor_keys = (neighbor_coords * M[None]).sum(dim=-1)
+        neighbor_keys = (neighbor_coords * OFFSET).sum(dim=-1)
         neighbor_search_indices = torch.searchsorted(sorted_keys, neighbor_keys)
         neighbor_search_indices = torch.clamp(neighbor_search_indices, 0, sorted_keys.shape[0] - 1)
         neighbor_valid &= sorted_keys[neighbor_search_indices] == neighbor_keys
-        neighbor_indices = torch.full((L * kernel_size[0] * kernel_size[1] * kernel_size[2],), 0xffffffff, dtype=torch.long, device=coords.device)
-        neighbor_indices[neighbor_valid] = indices[neighbor_search_indices[neighbor_valid]]
-        return SubMConv3dNeighborCache(**{'neighbor_map': neighbor_indices.reshape(L, -1).to(torch.uint32)})
+        neighbor_map = torch.full((L * V,), 0xffffffff, dtype=torch.long, device=coords.device)
+        in_indices = indices[neighbor_search_indices[neighbor_valid]]
+        v = torch.arange(V, device=coords.device).reshape(1, -1).repeat(L, 1).flatten()[neighbor_valid]
+        out_indices = torch.arange(L, device=coords.device).reshape(-1, 1).repeat(1, V).flatten()[neighbor_valid]
+        neighbor_map[out_indices * V + v] = in_indices
+        if needs_grad:
+            neighbor_map_bwd = torch.full((M * V,), 0xffffffff, dtype=torch.long, device=coords.device)
+            neighbor_map_bwd[in_indices * V + v] = out_indices
+        else:
+            neighbor_map_bwd = None
+        return SparseConv3dNeighborCache(**{
+            'neighbor_map': neighbor_map.reshape(L, -1).to(torch.uint32),
+            'neighbor_map_bwd': neighbor_map_bwd.reshape(M, -1).to(torch.uint32) if needs_grad else None,
+        })
         
     @staticmethod
     def _sparse_submanifold_conv_forward(
         feats: torch.Tensor,
-        neighbor_cache: SubMConv3dNeighborCache,
+        neighbor_cache: SparseConv3dNeighborCache,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -201,7 +303,7 @@ class SubMConv3dFunction(Function):
     def _sparse_submanifold_conv_backward(
         grad_output: torch.Tensor,
         feats: torch.Tensor,
-        neighbor_cache: SubMConv3dNeighborCache,
+        neighbor_cache: SparseConv3dNeighborCache,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -305,20 +407,20 @@ class SubMConv3dFunction(Function):
         feats: torch.Tensor,
         coords: torch.Tensor,
         shape: torch.Size,
-        neighbor_cache: Optional[SubMConv3dNeighborCache],
+        neighbor_cache: Optional[SparseConv3dNeighborCache],
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
         dilation: Tuple[int, int, int] = (1, 1, 1),
-    ) -> Tuple[torch.Tensor, SubMConv3dNeighborCache]:
+    ) -> Tuple[torch.Tensor, SparseConv3dNeighborCache]:
         Co, Kw, Kh, Kd, Ci = weight.shape
         assert feats.shape[-1] == Ci, f"Input channels ({feats.shape[-1]}) should match weight channels ({Ci})"
         
         # check if neighbor map is already computed
         if neighbor_cache is None:
-            neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (Kw, Kh, Kd), dilation)
+            neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, (Kw, Kh, Kd), dilation)
             
         # compute output
-        output = SubMConv3dFunction._sparse_submanifold_conv_forward(feats, neighbor_cache, weight, bias)
+        output = SparseConv3dFunction._sparse_submanifold_conv_forward(feats, neighbor_cache, weight, bias)
         
         # save for backward
         ctx.save_for_backward(feats, weight, bias)
@@ -331,7 +433,7 @@ class SubMConv3dFunction(Function):
         feats, weight, bias = ctx.saved_tensors
         neighbor_cache = ctx.neighbor_cache
         
-        grad_input, grad_weight, grad_bias = SubMConv3dFunction._sparse_submanifold_conv_backward(grad_output, feats, neighbor_cache, weight, bias)
+        grad_input, grad_weight, grad_bias = SparseConv3dFunction._sparse_submanifold_conv_backward(grad_output, feats, neighbor_cache, weight, bias)
         
         if not feats.requires_grad:
             grad_input = None
@@ -342,17 +444,17 @@ class SubMConv3dFunction(Function):
         return grad_input, None, None, None, grad_weight, grad_bias, None
 
 
-def sparse_submanifold_conv3d(
+def sparse_conv3d(
     feats: torch.Tensor,
     coords: torch.Tensor,
     shape: torch.Size,
     weight: torch.Tensor,
     bias: Optional[torch.Tensor] = None,
-    neighbor_cache: Optional[SubMConv3dNeighborCache] = None,
+    neighbor_cache: Optional[SparseConv3dNeighborCache] = None,
     dilation: Tuple[int, int, int] = (1, 1, 1),
-) -> Tuple[torch.Tensor, SubMConv3dNeighborCache]:
+) -> Tuple[torch.Tensor, SparseConv3dNeighborCache]:
     """
-    Sparse submanifold convolution for 3D input.
+    Sparse convolution for 3D input.
 
     Args:
         feats (torch.Tensor): [N, C] tensor of input features.
@@ -360,13 +462,13 @@ def sparse_submanifold_conv3d(
         shape (torch.Size): shape of the input tensor in NCWHD order.
         weight (torch.Tensor): [Co, Kw, Kh, Kd, Ci] tensor of weights.
         bias (Optional[torch.Tensor]): [Co] tensor of biases.
-        neighbor_cache (Optional[SubMConv3dNeighborCache]): neighbor cache for forward.
+        neighbor_cache (Optional[SparseConv3dNeighborCache]): neighbor cache for forward.
             if None, will be computed in forward.
         dilation (Tuple[int, int, int]): dilation rate.
 
     Returns:
-        Tuple[torch.Tensor, SubMConv3dNeighborCache]:
+        Tuple[torch.Tensor, SparseConv3dNeighborCache]:
             - output (torch.Tensor): [N, Co] tensor of output features.
-            - neighbor_cache (SubMConv3dNeighborCache): neighbor cache for backward.
+            - neighbor_cache (SparseConv3dNeighborCache): neighbor cache for backward.
     """
-    return SubMConv3dFunction.apply(feats, coords, shape, neighbor_cache, weight, bias, dilation)
+    return SparseConv3dFunction.apply(feats, coords, shape, neighbor_cache, weight, bias, dilation)

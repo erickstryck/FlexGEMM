@@ -5,10 +5,18 @@ class Algorithm:
     IMPLICIT_GEMM_SPLITK = "implicit_gemm_splitk"
     MASKED_IMPLICIT_GEMM = "masked_implicit_gemm"
     MASKED_IMPLICIT_GEMM_SPLITK = "masked_implicit_gemm_splitk"
+    
+
+class SparseConv3dOutCoordAlgorithm:
+    """Algorithm choices for generating output coordinates."""
+    HASHMAP = "hashmap"
+    EXPAND_UNIQUE = "expand_unique"
 
 
 ALGORITHM = Algorithm.MASKED_IMPLICIT_GEMM_SPLITK  # Default algorithm
-HASHMAP_RATIO = 2.0         # Ratio of hashmap size to input size
+HASHMAP_RATIO = 2.0                  # Ratio of hashmap size to input size
+OUT_COORD_HASHMAP_RATIO = 1.1        # Ratio of hashmap size to max possible output coordinates
+OUT_COORD_ALGO = SparseConv3dOutCoordAlgorithm.HASHMAP
 
 
 def set_algorithm(algorithm: Algorithm):
@@ -22,3 +30,4 @@ def set_hashmap_ratio(ratio: float):
 
 
 from .submanifold_conv3d import SubMConv3dFunction, sparse_submanifold_conv3d
+from .sparse_conv3d import SparseConv3dFunction, sparse_conv3d
