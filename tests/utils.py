@@ -69,3 +69,37 @@ def zero_grad(model_params):
             else:
                 param.grad.requires_grad_(False)
             param.grad.zero_()
+            
+            
+def lexsort(keys, dim=0):
+    """Perform lexicographical sort on multiple keys. Like `numpy.lexsort`. 
+    
+    Given multiple sorting keys, lexsort returns an array of integer indices that describes the sort order by multiple keys. 
+    The last key in the sequence is used for the primary sort order, ties are broken by the second-to-last key, and so on.
+
+    Parameters
+    ----
+    - `keys`: (Sequence[Tensor]) sequence of Tensors to sort by, or a single Tensor with shape `(num_keys, ...)`.
+    - `dim`: (int) the dimension to sort along. Note that if `keys` is a single Tensor, `dim=0` refers to the second dimension of `keys`.
+
+    Returns
+    ----
+    - `indices`: (Tensor) the indices that would sort the keys lexicographically along the specified dimension.
+
+    Notes
+    -----
+    Sorting is always stable.
+    """
+    keys = torch.unbind(keys, dim=0)
+
+    assert len(keys) > 0, "At least one key is required for lexsort"
+    
+    dim = dim % keys[0].ndim
+    for i, key in enumerate(keys):
+        if i == 0:
+            sorted_indices = torch.argsort(key, dim=dim, stable=True)
+        else:
+            key = torch.take_along_dim(key, sorted_indices, dim=dim)
+            sorted_indices = torch.take_along_dim(sorted_indices, torch.argsort(key, dim=dim, stable=True), dim=dim)
+    
+    return sorted_indices

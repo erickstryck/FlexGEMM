@@ -151,7 +151,7 @@ def flex_gemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch
 
 def flex_gemm_kernel_fn(params, feats, coords, shape):
     zero_grad(params.parameters())
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
     h = feats
     for i in range(len(params)):
         weight = params[f'layer{i}']['weight']

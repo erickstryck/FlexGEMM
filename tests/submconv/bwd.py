@@ -137,7 +137,7 @@ def torch_theory_req_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.EXPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     L = (neighbor_cache['neighbor_map']!=0xffffffff).sum()
     A = torch.randn((L, Ci), device=feats.device, dtype=feats.dtype)
     B = torch.randn((Co, Ci), device=feats.device, dtype=feats.dtype)
@@ -167,7 +167,7 @@ def egemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tens
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.EXPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -179,7 +179,7 @@ def igemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tens
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -191,7 +191,7 @@ def igemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Ten
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM_SPLITK)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -203,7 +203,7 @@ def migemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Ten
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -215,7 +215,7 @@ def migemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Te
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     dilation = (1, 1, 1)
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM_SPLITK)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation)
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, True)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,

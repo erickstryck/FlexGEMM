@@ -20,7 +20,25 @@ namespace flex_gemm {
 namespace spconv {
 
 /**
- * Convert neighbor map to gray and binary code
+ * Interpret the neighbor bitmask as a Gray-code word and sort elements by its
+ * decoded binary index. This induces a Gray-order linearization of the mask
+ * space, grouping similar neighbor patterns together, which reduces kernel
+ * specialization and active pattern diversity within a thread block.
+ *
+ * @param neighbor_map     [N, V] uint32 tensor containing the neighbor map
+ *
+ * @return                [N] neighbor mask (interpreted as Gray code)
+ *                        [N] indices sorted by Gray traversal order
+ */
+std::tuple<torch::Tensor, torch::Tensor> neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd(
+    const torch::Tensor& neighbor_map
+);
+
+
+/**
+ * Interpret the neighbor bitmask as a Gray-code word and sort elements by its
+ * decoded binary index. 
+ * Also prepare valid pairs for masked implicit gemm bachward pass
  * 
  * @param neighbor_map     [N, V] uint32 tensor containing the neighbor map
  * 

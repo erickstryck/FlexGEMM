@@ -10,6 +10,72 @@
 namespace flex_gemm {
 namespace spconv {
 
+__global__ void neighbor_map_to_gray_binary_code_kernel(
+    const uint32_t N,
+    const uint32_t V,
+    const uint32_t* __restrict__ neighbor_map,
+    int32_t* __restrict__ gray_code,
+    int32_t* __restrict__ binary_code
+) {
+    uint32_t thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (thread_id < N) {
+        // Build gray code
+        uint32_t gray = 0;
+        for (uint32_t v = 0; v < V; v++) {
+            uint32_t neighbor = neighbor_map[thread_id * V + v];
+            if (neighbor != std::numeric_limits<uint32_t>::max()) gray += 1 << v;
+        }
+        // Gray code to binary code
+        uint32_t binary = gray;
+        for (uint32_t v = 1; v < V; v++) {
+            binary ^= gray >> v;
+        }
+        // Store gray and binary code
+        gray_code[thread_id] = gray;
+        binary_code[thread_id] = binary;
+    }
+}
+
+
+/**
+ * Interpret the neighbor bitmask as a Gray-code word and sort elements by its
+ * decoded binary index. This induces a Gray-order linearization of the mask
+ * space, grouping similar neighbor patterns together, which reduces kernel
+ * specialization and active pattern diversity within a thread block.
+ *  
+ * @param neighbor_map     [N, V] uint32 tensor containing the neighbor map
+ * 
+ * @return                 [N] gray code
+ *                         [N] sorted idx
+ */
+std::tuple<torch::Tensor, torch::Tensor> neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd(
+    const torch::Tensor& neighbor_map
+) {
+    const int64_t N = neighbor_map.size(0);
+    const int64_t V = neighbor_map.size(1);
+
+    // Allocate output tensors
+    auto gray_code = torch::empty({N}, torch::dtype(torch::kInt32).device(neighbor_map.device()));
+    auto binary_code = torch::empty({N}, torch::dtype(torch::kInt32).device(neighbor_map.device()));
+
+    // Convert neighbor map to gray and binary code
+    neighbor_map_to_gray_binary_code_kernel<<<
+        (N + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE
+    >>>(
+        N,
+        V,
+        neighbor_map.data_ptr<uint32_t>(),
+        gray_code.data_ptr<int32_t>(),
+        binary_code.data_ptr<int32_t>()
+    );
+
+    auto sorted_idx = torch::argsort(binary_code);
+
+    return std::make_tuple(gray_code, sorted_idx);
+}
+
+
 __global__ void neighbor_map_to_gray_binary_code_and_T_map_kernel(
     const uint32_t N,
     const uint32_t V,
@@ -107,8 +173,10 @@ __global__ void gather_idx_val_seg_from_prefix_sum_kernel(
 
 
 /**
- * Convert neighbor map to gray and binary code
- * 
+ * Interpret the neighbor bitmask as a Gray-code word and sort elements by its
+ * decoded binary index. 
+ * Also prepare valid pairs for masked implicit gemm bachward pass
+ *  
  * @param neighbor_map     [N, V] uint32 tensor containing the neighbor map
  * 
  * @return                 [N] gray code

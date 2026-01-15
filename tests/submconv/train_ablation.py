@@ -25,7 +25,7 @@ def egemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Siz
         bias = torch.nn.Parameter(torch.randn(C, device=feats.device, dtype=feats.dtype))
         params[f'layer{i}'] = {'weight': weight, 'bias': bias}
 
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
 
     return {
         'params': params,
@@ -47,7 +47,7 @@ def igemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Siz
         bias = torch.nn.Parameter(torch.randn(C, device=feats.device, dtype=feats.dtype))
         params[f'layer{i}'] = {'weight': weight, 'bias': bias}
 
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
 
     return {
         'params': params,
@@ -69,7 +69,7 @@ def igemm_splitk_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: to
         bias = torch.nn.Parameter(torch.randn(C, device=feats.device, dtype=feats.dtype))
         params[f'layer{i}'] = {'weight': weight, 'bias': bias}
 
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
 
     return {
         'params': params,
@@ -91,7 +91,7 @@ def migemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Si
         bias = torch.nn.Parameter(torch.randn(C, device=feats.device, dtype=feats.dtype))
         params[f'layer{i}'] = {'weight': weight, 'bias': bias}
 
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
 
     return {
         'params': params,
@@ -112,7 +112,7 @@ def migemm_splitk_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: t
         bias = torch.nn.Parameter(torch.randn(C, device=feats.device, dtype=feats.dtype))
         params[f'layer{i}'] = {'weight': weight, 'bias': bias}
 
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1))
+    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, (3, 3, 3), (1, 1, 1), True)
 
     return {
         'params': params,

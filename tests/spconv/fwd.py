@@ -9,16 +9,44 @@ import spconv.pytorch as spconv
 # import torchsparse.nn.functional
 # import fvdb
 import flex_gemm
-from flex_gemm.ops.spconv import SubMConv3dFunction
-from utils import sphere_coords, calc_err, benchmark_kernel
+from flex_gemm.ops.spconv import SparseConv3dFunction
+from utils import sphere_coords, calc_err, benchmark_kernel, lexsort
 
 
-def spconv_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, **kwargs):
+def torch_conv3d_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor,
+                      ksize, stride, padding, dilation, **kwargs):
     Ci, Co = weight.shape[-1], weight.shape[0]
     ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
     
     # Init module.
-    module = spconv.SubMConv3d(Ci, Co, ksize, indice_key='test', algo=spconv.ConvAlgo.MaskSplitImplicitGemm).cuda().to(feats.dtype)
+    module = torch.nn.Conv3d(Ci, Co, ksize, stride=stride, padding=padding, dilation=dilation, bias=True).cuda().to(feats.dtype)
+    module.weight.data.copy_(weight.permute(0, 4, 1, 2, 3).contiguous())
+    module.bias.data.zero_()
+    
+    dense_feats = torch.zeros(shape, device=feats.device, dtype=feats.dtype)
+    dense_feats[coords[:, 0], :, coords[:, 1], coords[:, 2], coords[:, 3]] = feats
+    
+    return {
+        'module': module,
+        'input': dense_feats,
+        'bias': bias,
+    }
+    
+
+def torch_conv3d_kernel_fn(module, input, bias):
+    output = module(input)
+    coords = torch.any(output.abs() > 1e-6, dim=1).nonzero(as_tuple=False)
+    feats = output[coords[:, 0], :, coords[:, 1], coords[:, 2], coords[:, 3]] + bias
+    return [feats, coords]
+
+
+def spconv_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor,
+                      ksize, stride, padding, dilation, **kwargs):
+    Ci, Co = weight.shape[-1], weight.shape[0]
+    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
+    
+    # Init module.
+    module = spconv.SparseConv3d(Ci, Co, ksize, stride, padding, dilation, indice_key='test', algo=spconv.ConvAlgo.MaskSplitImplicitGemm).cuda().to(feats.dtype)
     module.weight.data.copy_(weight)
     module.bias.data.copy_(bias)
     
@@ -34,7 +62,8 @@ def spconv_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Si
     
 
 def spconv_kernel_fn(module, input):
-    return module(input).features
+    out = module(input)
+    return [out.features, out.indices]
 
 
 def torchsparse_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, **kwargs):
@@ -91,47 +120,9 @@ def fvdb_kernel_fn(input, weight, bias, sparse_conv_packinfo):
     return output
 
 
-def torch_theory_kernel_fn(A, B, bias):
-    C = torch.addmm(bias, A, B.T)
-    return None
-
-
-def torch_theory_all_prepare_fn(feats: torch.Tensor, weight: torch.Tensor, **kwargs):
-    N, Ci, Co = feats.shape[0], weight.shape[-1], weight.shape[0]
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    V = ksize[0] * ksize[1] * ksize[2]
-    A = torch.randn((N, V * Ci), device=feats.device, dtype=feats.dtype)
-    B = torch.randn((Co, V * Ci), device=feats.device, dtype=feats.dtype)
-    bias = torch.randn(Co, device=feats.device, dtype=feats.dtype)
-    return {
-        'A': A,
-        'B': B,
-        'bias': bias,
-    }
-    
-
-def torch_theory_req_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    Ci, Co = weight.shape[-1], weight.shape[0]
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
+def egemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, ksize, stride, padding, dilation, **kwargs):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.EXPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
-    L = (neighbor_cache['neighbor_map']!=0xffffffff).sum()
-    A = torch.randn((L, Ci), device=feats.device, dtype=feats.dtype)
-    B = torch.randn((Co, Ci), device=feats.device, dtype=feats.dtype)
-    bias = torch.randn(Co, device=feats.device, dtype=feats.dtype)
-    return {
-        'A': A,
-        'B': B,
-        'bias': bias,
-    }
-
-
-def egemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
-    flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.EXPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
+    neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, ksize, stride, padding, dilation, False)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -139,11 +130,9 @@ def egemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tens
     }
     
     
-def igemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
+def igemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, ksize, stride, padding, dilation, **kwargs):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
+    neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, ksize, stride, padding, dilation, False)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -151,11 +140,9 @@ def igemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tens
     }
     
 
-def igemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
+def igemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, ksize, stride, padding, dilation, **kwargs):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM_SPLITK)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
+    neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, ksize, stride, padding, dilation, False)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -163,11 +150,9 @@ def igemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Ten
     }
     
 
-def migemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
+def migemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, ksize, stride, padding, dilation, **kwargs):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
+    neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, ksize, stride, padding, dilation, False)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
@@ -175,21 +160,25 @@ def migemm_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Ten
     }
     
 
-def migemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, **kwargs):
-    ksize = (weight.shape[1], weight.shape[2], weight.shape[3])
-    dilation = (1, 1, 1)
+def migemmk_prepare_fn(coords: torch.Tensor, shape: torch.Size, weight: torch.Tensor, ksize, stride, padding, dilation, **kwargs):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM_SPLITK)
-    neighbor_cache = SubMConv3dFunction._compute_neighbor_cache(coords, shape, ksize, dilation, False)
+    neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, ksize, stride, padding, dilation, False)
     return {
         'weight': weight,
         'neighbor_cache': neighbor_cache,
         **kwargs,
     }
+    
+
+def flex_gemm_kernel_fn(**kwargs):
+    feats = SparseConv3dFunction._sparse_conv_forward(**kwargs)
+    coords = kwargs['neighbor_cache'].out_coords
+    return [feats, coords]
 
 
 def test_conv_fwd():
     # Matrix dimensions.
-    config = [
+    configs = [
         {'RES': 8, 'C': 1024},
         {'RES': 16, 'C': 1024},
         {'RES': 32, 'C': 1024},
@@ -201,29 +190,33 @@ def test_conv_fwd():
         # {'RES': 2048, 'C': 32},
     ]
     
+    test_cases = []
+    for config in configs:
+        test_cases.append({**config, 'ksize': (3, 3, 3), 'stride': (1, 1, 1), 'padding': (1, 1, 1), 'dilation': (1, 1, 1)})
+        test_cases.append({**config, 'ksize': (2, 2, 2), 'stride': (2, 2, 2), 'padding': (0, 0, 0), 'dilation': (1, 1, 1)})
+    
     # List of custom kernel functions.
     kernel_functions = {
-        # 'torch_all_ref': (torch_theory_kernel_fn, torch_theory_all_prepare_fn),
-        # 'torch_req_ref': (torch_theory_kernel_fn, torch_theory_req_prepare_fn),
+        'dense': (torch_conv3d_kernel_fn, torch_conv3d_prepare_fn),
         'spconv': (spconv_kernel_fn, spconv_prepare_fn),
         # 'torchsparse': (torchsparse_kernel_fn, torchsparse_prepare_fn),
         # 'fvdb': (fvdb_kernel_fn, fvdb_prepare_fn),
-        'egemm': (SubMConv3dFunction._sparse_submanifold_conv_forward, egemm_prepare_fn),
-        'igemm': (SubMConv3dFunction._sparse_submanifold_conv_forward, igemm_prepare_fn),
-        'igemmk': (SubMConv3dFunction._sparse_submanifold_conv_forward, igemmk_prepare_fn),
-        'migemm': (SubMConv3dFunction._sparse_submanifold_conv_forward, migemm_prepare_fn),
-        'migemmk': (SubMConv3dFunction._sparse_submanifold_conv_forward, migemmk_prepare_fn),
+        'egemm': (flex_gemm_kernel_fn, egemm_prepare_fn),
+        'igemm': (flex_gemm_kernel_fn, igemm_prepare_fn),
+        'igemmk': (flex_gemm_kernel_fn, igemmk_prepare_fn),
+        'migemm': (flex_gemm_kernel_fn, migemm_prepare_fn),
+        'migemmk': (flex_gemm_kernel_fn, migemmk_prepare_fn),
     }
     
-    reference = (SubMConv3dFunction._sparse_submanifold_conv_forward, egemm_prepare_fn)
+    reference = (flex_gemm_kernel_fn, egemm_prepare_fn)
     
     results = {}
-    for c in tqdm(config, leave=False):
-        RES, C = c['RES'], c['C']
+    for c in tqdm(test_cases, leave=False):
+        RES, C, K, S, P, D = c['RES'], c['C'], c['ksize'], c['stride'], c['padding'], c['dilation']
 
         # Create random input matrices.
         feats, coords, shape = sphere_coords(RES, C, dtype=torch.float16)
-        weight = torch.randn(C, 3, 3, 3, C, device=feats.device, dtype=feats.dtype)
+        weight = torch.randn(C, K[0], K[1], K[2], C, device=feats.device, dtype=feats.dtype)
         bias = torch.randn(C, device=feats.device, dtype=feats.dtype)
         args = {
             'feats': feats,
@@ -231,9 +224,13 @@ def test_conv_fwd():
             'shape': shape,
             'weight': weight,
             'bias': bias,
+            'ksize': K,
+            'stride': S,
+            'padding': P,
+            'dilation': D,
         }
 
-        config_key = f'RES={RES},C={C}'
+        config_key = f'RES={RES},C={C},K={K},S={S},P={P},D={D}'
         results[config_key] = {
             'time': [],
             'memory': [],
@@ -243,10 +240,25 @@ def test_conv_fwd():
         
         # Benchmark the reference kernel.
         avg_time_ref, memory_ref, C_ref = benchmark_kernel(reference[0], **args, prepare_fn=reference[1])
+        C_ref_feats, C_ref_coords = C_ref
+        C_ref_idx = lexsort(C_ref_coords.T)
+        C_ref = C_ref_feats[C_ref_idx]
+        C_ref_coords = C_ref_coords[C_ref_idx]
 
         # Benchmark each custom kernel.
-        for kernel_fn, prepare_fn in kernel_functions.values():
+        for name, (kernel_fn, prepare_fn) in kernel_functions.items():
+            if RES > 128 and name == 'dense':
+                results[config_key]['time'].append('N/A')
+                results[config_key]['memory'].append('N/A')
+                results[config_key]['err_max'].append('N/A')
+                results[config_key]['err_mean'].append('N/A')
+                continue
             avg_time, memory, C_kernel = benchmark_kernel(kernel_fn, **args, prepare_fn=prepare_fn)
+            C_kernel_feats, C_kernel_coords = C_kernel
+            C_kernel_idx = lexsort(C_kernel_coords.T)
+            C_kernel = C_kernel_feats[C_kernel_idx]
+            C_kernel_coords = C_kernel_coords[C_kernel_idx]
+            assert torch.equal(C_ref_coords, C_kernel_coords), f"Coords mismatch for {kernel_fn.__name__}. Got {C_ref_coords} and {C_kernel_coords}."
             results[config_key]['time'].append(f'{avg_time:.2f} ms ({avg_time_ref/avg_time*100:.1f}%)')
             results[config_key]['memory'].append(f'{memory:.1f}G')
             if C_kernel is not None:
@@ -264,13 +276,13 @@ def test_conv_fwd():
     for m in ['time','memory', 'err_max', 'err_mean']:
         print(m.capitalize())
         print("-" * 180)
-        items = [f'{"settings":<15}']
+        items = [f'{"settings":<64}']
         for f in kernel_functions.keys():
             items.append(f'{f:<20}')
         print(' | '.join(items))
         print("-" * 180)
         for k, v in results.items():
-            items = [f'{k:<15}']
+            items = [f'{k:<64}']
             items.extend([f'{x:<20}' for x in v[m]])
             print(' | '.join(items))
         print("-" * 180)

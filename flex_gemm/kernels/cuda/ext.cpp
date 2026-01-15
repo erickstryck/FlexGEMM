@@ -30,6 +30,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("hashmap_build_sparse_conv_out_coords", &spconv::hashmap_build_sparse_conv_out_coords);
     m.def("expand_unique_build_sparse_conv_out_coords", &spconv::expand_unique_build_sparse_conv_out_coords);
     m.def("hashmap_build_sparse_conv_neighbour_map", &spconv::hashmap_build_sparse_conv_neighbour_map);
+    m.def("neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd", &spconv::neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd);
     m.def("neighbor_map_post_process_for_masked_implicit_gemm_1", &spconv::neighbor_map_post_process_for_masked_implicit_gemm_1);
     m.def("neighbor_map_post_process_for_masked_implicit_gemm_2", &spconv::neighbor_map_post_process_for_masked_implicit_gemm_2);
 }

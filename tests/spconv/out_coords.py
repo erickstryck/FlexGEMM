@@ -8,6 +8,10 @@ from flex_gemm.ops.spconv import SparseConv3dFunction
 from utils import sphere_coords, benchmark_kernel
 
 
+flex_gemm.ops.spconv.OUT_COORD_ALGO = flex_gemm.ops.spconv.SparseConv3dOutCoordAlgorithm.HASHMAP
+flex_gemm.ops.spconv.SERIALIZATION_MODE = flex_gemm.ops.spconv.SerializationMode.BXYZ
+
+
 def torch_fn(
     coords: torch.Tensor, shape: torch.Size,
     ksize, stride, padding, dilation

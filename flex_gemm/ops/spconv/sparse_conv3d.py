@@ -50,7 +50,7 @@ class SparseConv3dFunction(Function):
         if coords.is_cuda:
             if spconv.OUT_COORD_ALGO == SparseConv3dOutCoordAlgorithm.HASHMAP:
                 output_coords = kernels.cuda.hashmap_build_sparse_conv_out_coords(
-                    coords, spconv.OUT_COORD_HASHMAP_RATIO,
+                    coords, spconv.OUT_COORD_HASHMAP_RATIO, spconv.SERIALIZATION_MODE,
                     N, W, H, D,
                     kernel_size[0], kernel_size[1], kernel_size[2],
                     stride[0], stride[1], stride[2],
@@ -59,7 +59,7 @@ class SparseConv3dFunction(Function):
                 )
             elif spconv.OUT_COORD_ALGO == SparseConv3dOutCoordAlgorithm.EXPAND_UNIQUE:
                 output_coords = kernels.cuda.expand_unique_build_sparse_conv_out_coords(
-                    coords,
+                    coords, spconv.SERIALIZATION_MODE,
                     N, W, H, D,
                     kernel_size[0], kernel_size[1], kernel_size[2],
                     stride[0], stride[1], stride[2],
@@ -136,12 +136,12 @@ class SparseConv3dFunction(Function):
             else:
                 raise NotImplementedError("CPU version of hashmap is not implemented")
             return SparseConv3dNeighborCache(**{
+                'out_coords': out_coords,
                 'neighbor_map': neighbor_map,
                 'neighbor_map_bwd': neighbor_map_bwd,
             })
         
         elif spconv.ALGORITHM in [Algorithm.MASKED_IMPLICIT_GEMM, Algorithm.MASKED_IMPLICIT_GEMM_SPLITK]:
-            raise NotImplementedError("TODO")
             if coords.is_cuda:
                 neighbor_map, neighbor_map_bwd = kernels.cuda.hashmap_build_sparse_conv_neighbour_map(
                     coords, out_coords, spconv.HASHMAP_RATIO, needs_grad,
@@ -156,17 +156,29 @@ class SparseConv3dFunction(Function):
             V = kernel_size[0] * kernel_size[1] * kernel_size[2]
             assert V <= 32, "Currently, the max kernel volume is 32 because kernel mask is encoded as uint32"
             
-            gray_code, sorted_idx, valid_signal_i, valid_signal_o, valid_signal_seg = \
-                kernels.cuda.neighbor_map_post_process_for_masked_implicit_gemm_1(neighbor_map)
-            
-            return SparseConv3dNeighborCache(**{
-                'neighbor_map': neighbor_map,
-                'gray_code': gray_code,
-                'sorted_idx': sorted_idx,
-                'valid_signal_seg': valid_signal_seg,
-                'valid_signal_i': valid_signal_i,
-                'valid_signal_o': valid_signal_o,
-            })
+            if needs_grad:
+                gray_code, sorted_idx, valid_signal_i, valid_signal_o, valid_signal_seg = \
+                    kernels.cuda.neighbor_map_post_process_for_masked_implicit_gemm_1(neighbor_map)
+                return SparseConv3dNeighborCache(**{
+                    'out_coords': out_coords,
+                    'neighbor_map': neighbor_map,
+                    'neighbor_map_bwd': neighbor_map_bwd,
+                    'gray_code': gray_code,
+                    'sorted_idx': sorted_idx,
+                    'valid_signal_seg': valid_signal_seg,
+                    'valid_signal_i': valid_signal_i,
+                    'valid_signal_o': valid_signal_o,
+                })
+            else:
+                gray_code, sorted_idx = \
+                    kernels.cuda.neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd(neighbor_map)
+                return SparseConv3dNeighborCache(**{
+                    'out_coords': out_coords,
+                    'neighbor_map': neighbor_map,
+                    'neighbor_map_bwd': neighbor_map_bwd,
+                    'gray_code': gray_code,
+                    'sorted_idx': sorted_idx,
+                })
                 
         else:
             raise ValueError(f"Unsupported algorithm {spconv.ALGORITHM}")
@@ -224,19 +236,19 @@ class SparseConv3dFunction(Function):
         else:
             neighbor_map_bwd = None
         return SparseConv3dNeighborCache(**{
+            'out_coords': out_coords,
             'neighbor_map': neighbor_map.reshape(L, -1).to(torch.uint32),
             'neighbor_map_bwd': neighbor_map_bwd.reshape(M, -1).to(torch.uint32) if needs_grad else None,
         })
         
     @staticmethod
-    def _sparse_submanifold_conv_forward(
+    def _sparse_conv_forward(
         feats: torch.Tensor,
         neighbor_cache: SparseConv3dNeighborCache,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         assert feats.is_contiguous(), "Input features should be contiguous"
-        N = feats.shape[0]
         Co, Kw, Kh, Kd, Ci = weight.shape
         V = Kd * Kh * Kw
         
@@ -244,10 +256,10 @@ class SparseConv3dFunction(Function):
             neighbor_map = neighbor_cache['neighbor_map']
             
             # im2col
-            im2col = torch.zeros((N * V, Ci), device=feats.device, dtype=feats.dtype)
+            im2col = torch.zeros((neighbor_map.shape[0] * V, Ci), device=feats.device, dtype=feats.dtype)
             mask = neighbor_map.view(-1) != 0xffffffff
             im2col[mask] = feats[neighbor_map.view(-1).long()[mask]]
-            im2col = im2col.view(N, V * Ci)
+            im2col = im2col.view(neighbor_map.shape[0], V * Ci)
             
             # addmm
             weight = weight.view(Co, V * Ci).transpose(0, 1)
@@ -257,7 +269,7 @@ class SparseConv3dFunction(Function):
                 output = torch.mm(im2col, weight)
         
         elif spconv.ALGORITHM == Algorithm.IMPLICIT_GEMM:
-            output = kernels.triton.sparse_submanifold_conv_fwd_implicit_gemm(
+            output = kernels.triton.indice_conv_fwd_implicit_gemm(
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
                 bias,
@@ -265,7 +277,7 @@ class SparseConv3dFunction(Function):
             )
             
         elif spconv.ALGORITHM == Algorithm.IMPLICIT_GEMM_SPLITK:
-            output = kernels.triton.sparse_submanifold_conv_fwd_implicit_gemm_splitk(
+            output = kernels.triton.indice_conv_fwd_implicit_gemm_splitk(
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
                 bias,
@@ -273,7 +285,7 @@ class SparseConv3dFunction(Function):
             )
             
         elif spconv.ALGORITHM == Algorithm.MASKED_IMPLICIT_GEMM:
-            output = kernels.triton.sparse_submanifold_conv_fwd_masked_implicit_gemm(
+            output = kernels.triton.indice_conv_fwd_masked_implicit_gemm(
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
                 bias,
@@ -284,7 +296,7 @@ class SparseConv3dFunction(Function):
             )
             
         elif spconv.ALGORITHM == Algorithm.MASKED_IMPLICIT_GEMM_SPLITK:
-            output = kernels.triton.sparse_submanifold_conv_fwd_masked_implicit_gemm_splitk(
+            output = kernels.triton.indice_conv_fwd_masked_implicit_gemm_splitk(
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
                 bias,
@@ -300,27 +312,26 @@ class SparseConv3dFunction(Function):
         return output
 
     @staticmethod
-    def _sparse_submanifold_conv_backward(
+    def _sparse_conv_backward(
         grad_output: torch.Tensor,
         feats: torch.Tensor,
         neighbor_cache: SparseConv3dNeighborCache,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        N = feats.shape[0]
         Co, Kw, Kh, Kd, Ci = weight.shape
         V = Kd * Kh * Kw
 
         if spconv.ALGORITHM == Algorithm.EXPLICIT_GEMM:
             neighbor_map = neighbor_cache['neighbor_map']
+            neighbor_map_bwd = neighbor_cache['neighbor_map_bwd']
             
             if feats.requires_grad:
                 # im2col
-                im2col = torch.zeros((N * V, Co), device=feats.device, dtype=feats.dtype)
-                inv_neighbor_map = torch.flip(neighbor_map, [1])
-                mask = inv_neighbor_map.view(-1) != 0xffffffff
-                im2col[mask] = grad_output[inv_neighbor_map.view(-1).long()[mask]]
-                im2col = im2col.view(N, V * Co)
+                im2col = torch.zeros((neighbor_map_bwd.shape[0] * V, Co), device=feats.device, dtype=feats.dtype)
+                mask = neighbor_map_bwd.view(-1) != 0xffffffff
+                im2col[mask] = grad_output[neighbor_map_bwd.view(-1).long()[mask]]
+                im2col = im2col.view(neighbor_map_bwd.shape[0], V * Co)
                 
                 # addmm
                 grad_input = torch.mm(im2col, weight.view(Co, V, Ci).transpose(0, 1).reshape(V * Co, Ci))
@@ -329,13 +340,13 @@ class SparseConv3dFunction(Function):
                 
             if weight.requires_grad:
                 # im2col
-                im2col = torch.zeros((N * V, Ci), device=weight.device, dtype=weight.dtype)
+                im2col = torch.zeros((neighbor_map.shape[0] * V, Ci), device=weight.device, dtype=weight.dtype)
                 mask = neighbor_map.view(-1) != 0xffffffff
                 im2col[mask] = feats[neighbor_map.view(-1).long()[mask]]
-                im2col = im2col.view(N, V * Ci)
+                im2col = im2col.view(neighbor_map.shape[0], V * Ci)
                 
                 # addmm
-                grad_weight = torch.mm(im2col.t(), grad_output.view(N, -1)).view(V, Ci, Co).permute(2, 0, 1).contiguous().view(Co, Kw, Kh, Kd, Ci)
+                grad_weight = torch.mm(im2col.t(), grad_output.view(neighbor_map.shape[0], -1)).view(V, Ci, Co).permute(2, 0, 1).contiguous().view(Co, Kw, Kh, Kd, Ci)
             else:
                 grad_weight = None
             
@@ -345,7 +356,7 @@ class SparseConv3dFunction(Function):
                 grad_bias = None
             
         elif spconv.ALGORITHM == Algorithm.IMPLICIT_GEMM:
-            grad_input, grad_weight, grad_bias = kernels.triton.sparse_submanifold_conv_bwd_implicit_gemm(
+            grad_input, grad_weight, grad_bias = kernels.triton.indice_conv_bwd_implicit_gemm(
                 grad_output.contiguous(),
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
@@ -355,7 +366,7 @@ class SparseConv3dFunction(Function):
             grad_weight = grad_weight.reshape(Co, Kw, Kh, Kd, Ci)
             
         elif spconv.ALGORITHM == Algorithm.IMPLICIT_GEMM_SPLITK:
-            grad_input, grad_weight, grad_bias = kernels.triton.sparse_submanifold_conv_bwd_implicit_gemm_splitk(
+            grad_input, grad_weight, grad_bias = kernels.triton.indice_conv_bwd_implicit_gemm_splitk(
                 grad_output.contiguous(),
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
@@ -365,7 +376,7 @@ class SparseConv3dFunction(Function):
             grad_weight = grad_weight.reshape(Co, Kw, Kh, Kd, Ci)
             
         elif spconv.ALGORITHM == Algorithm.MASKED_IMPLICIT_GEMM:
-            grad_input, grad_weight, grad_bias = kernels.triton.sparse_submanifold_conv_bwd_masked_implicit_gemm(
+            grad_input, grad_weight, grad_bias = kernels.triton.indice_conv_bwd_masked_implicit_gemm(
                 grad_output.contiguous(),
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
@@ -381,7 +392,7 @@ class SparseConv3dFunction(Function):
             grad_weight = grad_weight.reshape(Co, Kw, Kh, Kd, Ci)
         
         elif spconv.ALGORITHM == Algorithm.MASKED_IMPLICIT_GEMM_SPLITK:
-            grad_input, grad_weight, grad_bias = kernels.triton.sparse_submanifold_conv_bwd_masked_implicit_gemm_splitk(
+            grad_input, grad_weight, grad_bias = kernels.triton.indice_conv_bwd_masked_implicit_gemm_splitk(
                 grad_output.contiguous(),
                 feats,
                 weight.reshape(Co, Kd * Kh * Kw, Ci),
@@ -414,13 +425,14 @@ class SparseConv3dFunction(Function):
     ) -> Tuple[torch.Tensor, SparseConv3dNeighborCache]:
         Co, Kw, Kh, Kd, Ci = weight.shape
         assert feats.shape[-1] == Ci, f"Input channels ({feats.shape[-1]}) should match weight channels ({Ci})"
-        
+        need_grad = any(ctx.needs_input_grad)
+
         # check if neighbor map is already computed
         if neighbor_cache is None:
-            neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, (Kw, Kh, Kd), dilation)
+            neighbor_cache = SparseConv3dFunction._compute_neighbor_cache(coords, shape, (Kw, Kh, Kd), dilation, need_grad)
             
         # compute output
-        output = SparseConv3dFunction._sparse_submanifold_conv_forward(feats, neighbor_cache, weight, bias)
+        output = SparseConv3dFunction._sparse_conv_forward(feats, neighbor_cache, weight, bias)
         
         # save for backward
         ctx.save_for_backward(feats, weight, bias)
@@ -433,7 +445,7 @@ class SparseConv3dFunction(Function):
         feats, weight, bias = ctx.saved_tensors
         neighbor_cache = ctx.neighbor_cache
         
-        grad_input, grad_weight, grad_bias = SparseConv3dFunction._sparse_submanifold_conv_backward(grad_output, feats, neighbor_cache, weight, bias)
+        grad_input, grad_weight, grad_bias = SparseConv3dFunction._sparse_conv_backward(grad_output, feats, neighbor_cache, weight, bias)
         
         if not feats.requires_grad:
             grad_input = None
