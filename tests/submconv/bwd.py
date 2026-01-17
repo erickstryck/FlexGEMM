@@ -231,10 +231,10 @@ def test_conv_bwd():
         {'RES': 32, 'C': 1024, 'B': 16},
         {'RES': 64, 'C': 1024, 'B': 4},
         {'RES': 128, 'C': 512, 'B': 4},
-        {'RES': 256, 'C': 256, 'B': 4},
-        {'RES': 512, 'C': 128, 'B': 4},
-        # {'RES': 1024, 'C': 64, 'B': 4},
-        # {'RES': 2048, 'C': 32, 'B': 4},
+        {'RES': 256, 'C': 256, 'B': 2},
+        {'RES': 512, 'C': 128, 'B': 1},
+        # {'RES': 1024, 'C': 64, 'B': 1},
+        # {'RES': 2048, 'C': 32, 'B': 1},
     ]
     
     # List of custom kernel functions.
@@ -257,7 +257,7 @@ def test_conv_bwd():
     
     results = {}
     for c in tqdm(config, leave=False):
-        RES, C = c['RES'], c['C']
+        RES, C, B = c['RES'], c['C'], c['B']
 
         # Create random input matrices.
         feats, coords, shape = sphere_coords(RES, C, B, dtype=torch.float16)
