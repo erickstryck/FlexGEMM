@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from ....utils.autotuner import triton_autotune
-from .config import autotune_config
+from .config import autotune_config, allow_tf32, invalid_neigh
 
 
 @triton_autotune(
@@ -17,14 +17,14 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_kernel(
     weight,
     neighbor,
     grad_input,
-    invalid_neigh,
     # Tensor dimensions
     N, LOGN, Ci, Co, V: tl.constexpr,
     # Meta-parameters
     B1: tl.constexpr,   # Block size for N dimension
     B2: tl.constexpr,   # Block size for Ci dimension
     BK: tl.constexpr,   # Block size for K dimension (V * Co)
-    allow_tf32: tl.constexpr
+    allow_tf32: tl.constexpr,
+    invalid_neigh: tl.constexpr,
 ):
     """
     Sparse submanifold convolution backward to input kernel using implicit GEMM.
@@ -91,7 +91,6 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_kernel(
     input,
     neighbor,
     grad_weight,
-    invalid_neigh,
     # Tensor dimensions
     N, LOGN, Ci, Co, V: tl.constexpr,
     # Meta-parameters
@@ -101,6 +100,7 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_kernel(
     BV: tl.constexpr,   # Block size for V dimension
     BCi: tl.constexpr,  # Block size for Ci dimension
     allow_tf32: tl.constexpr,
+    invalid_neigh: tl.constexpr,
 ):
     """
     Sparse submanifold convolution backward to weight kernel using implicit GEMM.
@@ -156,8 +156,6 @@ def sparse_submanifold_conv_bwd_implicit_gemm(
     weight: torch.Tensor,
     bias: torch.Tensor,
     neighbor: torch.Tensor,
-    invalid_neigh: int = 0xffffffff,
-    allow_tf32: bool = True
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
     assert grad_output.is_contiguous(), "Matrix grad_output must be contiguous"
     assert input.shape[1] == weight.shape[2], "Incompatible dimensions"
@@ -180,9 +178,9 @@ def sparse_submanifold_conv_bwd_implicit_gemm(
             weight,
             neighbor,
             grad_input,
-            invalid_neigh,
             N, LOGN, Ci, Co, V,
-            allow_tf32=allow_tf32
+            allow_tf32=allow_tf32,
+            invalid_neigh=invalid_neigh
         )
         
     # Grad for weight
@@ -196,9 +194,9 @@ def sparse_submanifold_conv_bwd_implicit_gemm(
             input,
             neighbor,
             grad_weight,
-            invalid_neigh,
             N, LOGN, Ci, Co, V,
-            allow_tf32=allow_tf32
+            allow_tf32=allow_tf32,
+            invalid_neigh=invalid_neigh
         )
         
     # Grad for bias

@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 from ..utils import get_num_sm
 from ....utils.autotuner import triton_autotune, autotune
-from .config import autotune_config
+from .config import autotune_config, invalid_neigh, allow_tf32
 from .sparse_submanifold_conv_fwd_implicit_gemm import sparse_submanifold_conv_fwd_implicit_gemm_kernel
 
 
@@ -19,7 +19,6 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk_kernel(
     bias,
     neighbor,
     output,
-    invalid_neigh,
     # Tensor dimensions
     N, LOGN, Ci, Co, V: tl.constexpr,
     # Meta-parameters
@@ -27,7 +26,8 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk_kernel(
     B2: tl.constexpr,   # Block size for Co dimension
     BK: tl.constexpr,   # Block size for K dimension (V * Ci)
     SPLITK: tl.constexpr,  # Split K dimension
-    allow_tf32: tl.constexpr
+    allow_tf32: tl.constexpr,
+    invalid_neigh: tl.constexpr,
 ):
     """
     Sparse submanifold convolution forward kernel using implicit GEMM with split K dimension.
@@ -76,9 +76,9 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk_kernel(
         weight_ptr += min(BK, Ci - bk * BK)
 
     # add bias
-    # if bias is not None and block_id_k == 0:
-    #     bias_block = tl.load(bias + offset_co)
-    #     accumulator += bias_block[None, :]
+    if bias is not None and block_id_k == 0:
+        bias_block = tl.load(bias + offset_co)
+        accumulator += bias_block[None, :]
 
     # Write back the block of the output matrix with masks.
     out_offset_n = block_id_n * B1 + tl.arange(0, B1)
@@ -117,9 +117,7 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk(
     weight: torch.Tensor,
     bias: torch.Tensor,
     neighbor: torch.Tensor,
-    invalid_neigh: int=0xffffffff,
     SPLITK: int = 1,
-    allow_tf32: bool = True
 ) -> torch.Tensor:
     assert input.shape[1] == weight.shape[2], "Incompatible dimensions"
     assert input.is_contiguous(), "Matrix input must be contiguous"
@@ -132,18 +130,20 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk(
         output = torch.empty((N, Co), device=input.device, dtype=input.dtype)
         def grid(META): return (triton.cdiv(Co, META['B2']) * triton.cdiv(N, META['B1']),)
         sparse_submanifold_conv_fwd_implicit_gemm_kernel[grid](
-            input, weight, bias, neighbor, output, invalid_neigh,
+            input, weight, bias, neighbor, output,
             N, LOGN, Ci, Co, V,  #
-            allow_tf32=allow_tf32
+            allow_tf32=allow_tf32,
+            invalid_neigh=invalid_neigh
         )
         return output
     else:
         output = torch.empty((SPLITK, N, Co), device=input.device, dtype=torch.float32)
         def grid(META): return (triton.cdiv(Co, META['B2']) * triton.cdiv(N, META['B1']), SPLITK)
         sparse_submanifold_conv_fwd_implicit_gemm_splitk_kernel[grid](
-            input, weight, bias, neighbor, output, invalid_neigh,
+            input, weight, bias, neighbor, output,
             N, LOGN, Ci, Co, V,  #
             SPLITK=SPLITK,
-            allow_tf32=allow_tf32
+            allow_tf32=allow_tf32,
+            invalid_neigh=invalid_neigh
         )
         return output.sum(dim=0).to(input.dtype)
