@@ -2,8 +2,26 @@ import triton
 from ..utils import get_autotune_config
 
 
-allow_tf32 = False
-invalid_neigh = -1
+class KernelConfig:
+    def __init__(self):
+        self._allow_tf32 = False
+        self._invalid_neigh = 0xffffffff
+    
+    @property
+    def allow_tf32(self):
+        return self._allow_tf32
+    
+    @property
+    def invalid_neigh(self):
+        return self._invalid_neigh
+    
+    def configure(self, allow_tf32: bool = True, invalid_neigh: int = 0xffffffff):
+        self._allow_tf32 = allow_tf32
+        self._invalid_neigh = invalid_neigh
+        print('[Flex GEMM]: Updated configuraton: \n - allow tf32: {}\n - invalid neighbour: {}'.format(self._allow_tf32, self._invalid_neigh))
+
+
+_kernel_config = KernelConfig()
 
 
 autotune_config = get_autotune_config(

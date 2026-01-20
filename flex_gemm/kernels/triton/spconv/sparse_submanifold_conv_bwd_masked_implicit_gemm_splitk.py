@@ -233,7 +233,7 @@ def sparse_submanifold_conv_bwd_input_masked_implicit_gemm_splitk(
             N, LOGN, Ci, Co, V,
             valid_kernel=valid_kernel,
             valid_kernel_seg=valid_kernel_seg,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         return grad_input
     else:
@@ -249,7 +249,7 @@ def sparse_submanifold_conv_bwd_input_masked_implicit_gemm_splitk(
             valid_kernel=valid_kernel,
             valid_kernel_seg=valid_kernel_seg,
             SPLITK=SPLITK,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         return grad_input.sum(0).to(weight.dtype)
     
@@ -300,7 +300,7 @@ def sparse_submanifold_conv_bwd_weight_masked_implicit_gemm_splitk(
             valid_signal_seg,
             grad_weight,
             N, LOGN, Ci, Co, V,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         return grad_weight
     else:
@@ -315,7 +315,7 @@ def sparse_submanifold_conv_bwd_weight_masked_implicit_gemm_splitk(
             grad_weight,
             N, LOGN, Ci, Co, V,
             SPLITK=SPLITK,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         return grad_weight.sum(0).to(input.dtype)
 

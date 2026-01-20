@@ -211,7 +211,7 @@ def sparse_submanifold_conv_bwd_masked_implicit_gemm(
             N, LOGN, Ci, Co, V,
             valid_kernel=valid_kernel,
             valid_kernel_seg=valid_kernel_seg,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         
     # Grad for weight
@@ -228,7 +228,7 @@ def sparse_submanifold_conv_bwd_masked_implicit_gemm(
             valid_signal_seg,
             grad_weight,
             N, LOGN, Ci, Co, V,
-            allow_tf32=config.allow_tf32,
+            allow_tf32=config._kernel_config.allow_tf32,
         )
         
     # Grad for bias

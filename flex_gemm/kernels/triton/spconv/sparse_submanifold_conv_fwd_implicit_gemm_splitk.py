@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 from ..utils import get_num_sm
 from ....utils.autotuner import triton_autotune, autotune
-from .config import autotune_config, invalid_neigh, allow_tf32
+from .config import autotune_config, _kernel_config
 from .sparse_submanifold_conv_fwd_implicit_gemm import sparse_submanifold_conv_fwd_implicit_gemm_kernel
 
 
@@ -126,6 +126,10 @@ def sparse_submanifold_conv_fwd_implicit_gemm_splitk(
     assert neighbor.is_contiguous(), "Matrix neighbor must be contiguous"
     N, Ci, Co, V = neighbor.shape[0], input.shape[1], weight.shape[0], weight.shape[1]
     LOGN = int(math.log2(N))
+
+    allow_tf32 = _kernel_config.allow_tf32
+    invalid_neigh = _kernel_config.invalid_neigh
+    
     # Launch the kernel.
     if SPLITK == 1:
         output = torch.empty((N, Co), device=input.device, dtype=input.dtype)

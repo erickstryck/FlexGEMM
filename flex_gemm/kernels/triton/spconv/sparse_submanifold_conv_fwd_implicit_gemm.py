@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from ....utils.autotuner import triton_autotune
-from .config import autotune_config, allow_tf32, invalid_neigh
+from .config import autotune_config, _kernel_config
 
 
 @triton_autotune(
@@ -99,6 +99,10 @@ def sparse_submanifold_conv_fwd_implicit_gemm(
     LOGN = int(math.log2(N))
     # Allocate output matrix output.
     output = torch.empty((N, Co), device=input.device, dtype=input.dtype)
+
+    allow_tf32 = _kernel_config.allow_tf32
+    invalid_neigh = _kernel_config.invalid_neigh
+
     # Launch the kernel.
     grid = lambda META: (triton.cdiv(Co, META['B2']) * triton.cdiv(N, META['B1']),)
     sparse_submanifold_conv_fwd_implicit_gemm_kernel[grid](

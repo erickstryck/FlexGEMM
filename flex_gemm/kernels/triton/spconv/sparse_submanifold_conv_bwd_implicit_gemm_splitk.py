@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from ..utils import get_num_sm
 from ....utils.autotuner import triton_autotune, autotune
-from .config import autotune_config, allow_tf32, invalid_neigh
+from .config import autotune_config, _kernel_config
 from .sparse_submanifold_conv_bwd_implicit_gemm import (
     sparse_submanifold_conv_bwd_input_implicit_gemm_kernel,
     sparse_submanifold_conv_bwd_weight_implicit_gemm_kernel,
@@ -194,6 +194,10 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk(
 ) -> torch.Tensor:
     N, Ci, Co, V = neighbor.shape[0], weight.shape[-1], weight.shape[0], weight.shape[1]
     LOGN = int(math.log2(N))
+    
+    allow_tf32 = _kernel_config.allow_tf32
+    invalid_neigh = _kernel_config.invalid_neigh
+
     # Launch the kernel.
     if SPLITK == 1:
         grad_input = torch.empty((N, Ci), device=weight.device, dtype=weight.dtype)
@@ -255,7 +259,11 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_splitk(
     SPLITK: int = 1,
 ) -> torch.Tensor:
     N, Ci, Co, V = neighbor.shape[0], input.shape[1], grad_output.shape[1], neighbor.shape[1]
-    LOGN = int(math.log2(N))
+    LOGN = int(math.log2(N))    
+    
+    allow_tf32 = _kernel_config.allow_tf32
+    invalid_neigh = _kernel_config.invalid_neigh
+
     # Launch the kernel.
     if SPLITK == 1:
         grad_weight = torch.empty((Co, V, Ci), device=grad_output.device, dtype=grad_output.dtype)

@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from ....utils.autotuner import triton_autotune
-from .config import autotune_config, allow_tf32, invalid_neigh
+from .config import autotune_config, _kernel_config
 
 
 @triton_autotune(
@@ -167,6 +167,10 @@ def sparse_submanifold_conv_bwd_implicit_gemm(
     LOGN = int(math.log2(N))
     
     grad_input, grad_weight, grad_bias = None, None, None
+        
+    allow_tf32 = _kernel_config.allow_tf32
+    invalid_neigh = _kernel_config.invalid_neigh
+
     
     # Grad for input
     if input.requires_grad:
