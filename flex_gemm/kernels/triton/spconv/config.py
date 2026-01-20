@@ -57,7 +57,7 @@ autotune_config = get_autotune_config(
             triton.Config({'B1': 128, 'B2': 128, 'BK': 128}, num_stages=5, num_warps=8),
             triton.Config({'B1': 128, 'B2': 128, 'BK': 64}, num_stages=5, num_warps=4),
             triton.Config({'B1': 128, 'B2': 128, 'BK': 32}, num_stages=5, num_warps=4),
-        ]
+        ],
         'MI300X': [
             triton.Config({'B1': 256, 'B2': 256, 'BK': 64, 'waves_per_eu': 2}, num_stages=2, num_warps=16),
             triton.Config({'B1': 256, 'B2': 256, 'BK': 64, 'waves_per_eu': 2, 'kpack': 2, 'matrix_instr_nonkdim': 16}, num_stages=2, num_warps=8),
