@@ -496,7 +496,7 @@ class SparseConv3dFunction(Function):
             grad_weight = None
         if not bias.requires_grad:
             grad_bias = None
-        return grad_input, None, None, None, grad_weight, grad_bias, None, None, None
+        return grad_input, None, None, None, grad_weight, grad_bias, None, None, None, None
 
 
 def sparse_conv3d(
