@@ -7,8 +7,14 @@ from ....utils.autotuner import triton_autotune
 from . import config
 
 
+# Fallback configurations for ROCm/HIP to avoid "invalid configuration argument"
+fallback_configs = [
+    triton.Config({'BM': 32, 'BK': 32}, num_warps=1, num_stages=1),
+    triton.Config({'BM': 32, 'BK': 32}, num_warps=2, num_stages=2),
+]
+
 @triton_autotune(
-    configs=config.autotune_config,
+    configs=fallback_configs + config.autotune_config,
     key=['LOGN', 'M', 'C', 'V']
 )
 @triton.jit

@@ -64,7 +64,12 @@ class TritonPersistentCacheAutotuner(triton.runtime.Autotuner):
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
                 bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                timings = {}
+                for config in pruned_configs:
+                    try:
+                        timings[config] = self._bench(*args, config=config, **kwargs)
+                    except Exception:
+                        timings[config] = float('inf')
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
