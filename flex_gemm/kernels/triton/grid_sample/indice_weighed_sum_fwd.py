@@ -14,7 +14,7 @@ fallback_configs = [
 ]
 
 @triton_autotune(
-    configs=fallback_configs + config.autotune_config,
+    configs=fallback_configs if torch.version.hip else fallback_configs + config.autotune_config,
     key=['LOGN', 'M', 'C', 'V']
 )
 @triton.jit
