@@ -67,7 +67,11 @@ class TritonPersistentCacheAutotuner(triton.runtime.Autotuner):
                 timings = {}
                 for config in pruned_configs:
                     try:
-                        timings[config] = self._bench(*args, config=config, **kwargs)
+                        res = self._bench(*args, config=config, **kwargs)
+                        if isinstance(res, (list, tuple)):
+                            timings[config] = res[0]
+                        else:
+                            timings[config] = res
                     except Exception:
                         timings[config] = float('inf')
                 bench_end = time.time()
