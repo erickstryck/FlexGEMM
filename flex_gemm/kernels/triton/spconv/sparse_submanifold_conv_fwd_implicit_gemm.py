@@ -7,8 +7,13 @@ from ....utils.autotuner import triton_autotune
 from . import config
 
 
+# Fallback configurations for ROCm/HIP to avoid "illegal memory access"
+fallback_configs = [
+    triton.Config({'B1': 32, 'B2': 32, 'BK': 32}, num_warps=1, num_stages=1),
+]
+
 @triton_autotune(
-    configs=config.autotune_config,
+    configs=fallback_configs if torch.version.hip else config.autotune_config,
     key=['LOGN', 'Ci', 'Co', 'V', 'allow_tf32'],
 )
 @triton.jit
