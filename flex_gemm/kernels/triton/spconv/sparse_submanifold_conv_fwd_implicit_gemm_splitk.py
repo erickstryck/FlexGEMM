@@ -10,7 +10,7 @@ from .sparse_submanifold_conv_fwd_implicit_gemm import sparse_submanifold_conv_f
 
 # Fallback configurations for ROCm/HIP to avoid "illegal memory access" and JIT hangs
 fallback_configs = [
-    triton.Config({'B1': 64, 'B2': 64, 'BK': 32, 'SPLITK': 1}, num_warps=4, num_stages=2),
+    triton.Config({'B1': 64, 'B2': 64, 'BK': 32}, num_warps=4, num_stages=2),
 ]
 
 @triton_autotune(
