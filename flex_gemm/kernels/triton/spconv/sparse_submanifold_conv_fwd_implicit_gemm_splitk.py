@@ -8,8 +8,13 @@ from . import config
 from .sparse_submanifold_conv_fwd_implicit_gemm import sparse_submanifold_conv_fwd_implicit_gemm_kernel
 
 
+# Fallback configurations for ROCm/HIP to avoid "illegal memory access" and JIT hangs
+fallback_configs = [
+    triton.Config({'B1': 64, 'B2': 64, 'BK': 32, 'SPLITK': 1}, num_warps=4, num_stages=2),
+]
+
 @triton_autotune(
-    configs=config.autotune_config,
+    configs=fallback_configs if torch.version.hip else config.autotune_config,
     key=['LOGN', 'Ci', 'Co', 'V', 'SPLITK', 'allow_tf32'],
 )
 @triton.jit
